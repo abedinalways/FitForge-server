@@ -28,6 +28,7 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
     const classCollection = client.db('FitForge').collection('Classes');
+    const reviewCollection = client.db('FitForge').collection('Reviews');
     //classes api
     app.get('/featuredClasses', async (req, res) => {
       const query = {};
@@ -36,6 +37,12 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result)
       
+    })
+    //reviews api
+    app.get('/reviews', async (req, res) => {
+      const cursor = reviewCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
     })
     // Send a ping to confirm a successful connection
     await client.db('admin').command({ ping: 1 });
