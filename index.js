@@ -1,7 +1,7 @@
 const express = require('express');
 const cors=require('cors')
 const app = express();
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 const port = process.env.port || 3000;
 
@@ -31,6 +31,7 @@ async function run() {
     const reviewCollection = client.db('FitForge').collection('Reviews');
     const postCollection = client.db('FitForge').collection('posts');
     const subscriberCollection = client.db('FitForge').collection('subscriber');
+    const trainerCollection = client.db('FitForge').collection('AllTrainer');
     //classes api
     app.get('/featuredClasses', async (req, res) => {
       const query = {};
@@ -58,6 +59,24 @@ async function run() {
       const subscriber = req.body;
       const result = await subscriberCollection.insertOne(subscriber);
       res.send(result);
+    })
+    //team api
+    app.get('/team', async (req, res) => {
+      const cursor = trainerCollection.find().limit(3);
+      const result = await cursor.toArray();
+      res.send(result)
+    });
+    //all trainer api
+    app.get('/allTrainer', async (req, res) => {
+      const cursor = trainerCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    })
+    //trainer details api
+    app.get('/allTrainer/:id', async (req, res) => {
+      const trainerId = req.params.id;
+      const trainer = await trainerCollection.findOne({ _id: new ObjectId(trainerId) });
+      res.send(trainer);
     })
     // Send a ping to confirm a successful connection
     await client.db('admin').command({ ping: 1 });
