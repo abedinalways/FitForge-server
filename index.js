@@ -29,6 +29,8 @@ async function run() {
     await client.connect();
     const classCollection = client.db('FitForge').collection('Classes');
     const reviewCollection = client.db('FitForge').collection('Reviews');
+    const postCollection = client.db('FitForge').collection('posts');
+    const subscriberCollection = client.db('FitForge').collection('subscriber');
     //classes api
     app.get('/featuredClasses', async (req, res) => {
       const query = {};
@@ -42,6 +44,19 @@ async function run() {
     app.get('/reviews', async (req, res) => {
       const cursor = reviewCollection.find();
       const result = await cursor.toArray();
+      res.send(result);
+    })
+    //Community Posts api
+    app.get('/posts', async (req, res) => {
+      const cursor = postCollection.find().sort({ date: -1 }).limit(6);
+      const result = await cursor.toArray();
+      res.send(result);
+    })
+
+    //subscriber
+    app.post('/subscriber', async (req, res) => {
+      const subscriber = req.body;
+      const result = await subscriberCollection.insertOne(subscriber);
       res.send(result);
     })
     // Send a ping to confirm a successful connection
