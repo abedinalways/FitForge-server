@@ -32,6 +32,7 @@ async function run() {
     const postCollection = client.db('FitForge').collection('posts');
     const subscriberCollection = client.db('FitForge').collection('subscriber');
     const trainerCollection = client.db('FitForge').collection('AllTrainer');
+    const paymentCollection = client.db('FitForge').collection('Payments');
     //classes api
     app.get('/featuredClasses', async (req, res) => {
       const query = {};
@@ -78,6 +79,26 @@ async function run() {
       const trainer = await trainerCollection.findOne({ _id: new ObjectId(trainerId) });
       res.send(trainer);
     })
+    //trainer Booking api
+    app.get('/trainer/:id', async (req, res) => {
+      const bookingId = req.params.id;
+      const booking = await trainerCollection.findOne({ _id: new ObjectId(bookingId) });
+      res.send(booking);
+    })
+    //payment api
+    app.get('/payment', async (req, res) => {
+      const cursor =  paymentCollection.find();
+      const payment = await cursor.toArray();
+      res.send(payment);
+    });
+    //payment Detail api
+    app.get('/paymentDetail/:id', async (req, res) => {
+      const paymentId = req.params.id;
+      const paymentDetail = await trainerCollection.findOne({ _id: new ObjectId(paymentId) });
+      res.send(paymentDetail);
+    })
+    //payment booking api
+    
     // Send a ping to confirm a successful connection
     await client.db('admin').command({ ping: 1 });
     console.log(
