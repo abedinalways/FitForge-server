@@ -42,11 +42,139 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
-    //all classes api
     app.get('/allClasses', async (req, res) => {
-      const cursor = classCollection.find();
-      const result = await cursor.toArray();
-      res.send(result);
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 6;
+        const skip = (page - 1) * limit;
+
+        // Get total count for pagination
+        const totalClasses = await classCollection.countDocuments();
+
+        // Get classes with pagination
+        const cursor = classCollection.find().skip(skip).limit(limit);
+        const classes = await cursor.toArray();
+
+        // Calculate pagination info
+        const totalPages = Math.ceil(totalClasses / limit);
+
+        res.send({
+          classes,
+          pagination: {
+            currentPage: page,
+            totalPages,
+            totalClasses,
+            hasNextPage: page < totalPages,
+            hasPrevPage: page > 1,
+            limit,
+          },
+        });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch classes' });
+      }
+    });
+
+    app.get('/allClassesComplete', async (req, res) => {
+      try {
+        const cursor = classCollection.find();
+        const result = await cursor.toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch all classes' });
+      }
+    });
+
+    // Get single class by ID
+    app.get('/class/:id', async (req, res) => {
+      try {
+        const classId = req.params.id;
+        const classItem = await classCollection.findOne({
+          _id: new ObjectId(classId),
+        });
+
+        if (!classItem) {
+          return res.status(404).send({ error: 'Class not found' });
+        }
+
+        res.send(classItem);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch class details' });
+      }
+    });
+    // Get trainers for a specific class
+    app.get('/class/:id/trainers', async (req, res) => {
+      try {
+        const classId = req.params.id;
+        const limit = parseInt(req.query.limit) || 5;
+
+        // Fetch class details
+        const classItem = await classCollection.findOne({
+          _id: new ObjectId(classId),
+        });
+        if (!classItem) {
+          return res.status(404).send({ error: 'Class not found' });
+        }
+
+        // Match trainers by expertise
+        const trainers = await trainerCollection
+          .find({
+            expertise: {
+              $elemMatch: { $regex: classItem.title, $options: 'i' },
+            },
+          })
+          .limit(limit)
+          .toArray();
+
+        res.send(trainers);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch class trainers' });
+      }
+    });
+
+    // Search classes by name or category
+    app.get('/searchClasses', async (req, res) => {
+      try {
+        const { q, category, page = 1, limit = 6 } = req.query;
+        const skip = (page - 1) * limit;
+
+        let query = {};
+
+        if (q) {
+          query.$or = [
+            { title: new RegExp(q, 'i') },
+            { className: new RegExp(q, 'i') },
+            { description: new RegExp(q, 'i') },
+            { category: new RegExp(q, 'i') },
+          ];
+        }
+
+        if (category) {
+          query.category = new RegExp(category, 'i');
+        }
+
+        const totalClasses = await classCollection.countDocuments(query);
+        const classes = await classCollection
+          .find(query)
+          .skip(skip)
+          .limit(parseInt(limit))
+          .toArray();
+
+        const totalPages = Math.ceil(totalClasses / limit);
+
+        res.send({
+          classes,
+          pagination: {
+            currentPage: parseInt(page),
+            totalPages,
+            totalClasses,
+            hasNextPage: page < totalPages,
+            hasPrevPage: page > 1,
+            limit: parseInt(limit),
+          },
+        });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to search classes' });
+      }
     });
     //reviews api
     app.get('/reviews', async (req, res) => {
@@ -79,6 +207,34 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
+
+    // Get trainers by specialization
+    app.get('/trainersBySpecialization/:specialization', async (req, res) => {
+      try {
+        const { specialization } = req.params;
+        const limit = parseInt(req.query.limit) || 5;
+
+        const trainers = await trainerCollection
+          .find({
+            $or: [
+              { specialization: new RegExp(specialization, 'i') },
+              {
+                expertise: {
+                  $elemMatch: { $regex: specialization, $options: 'i' },
+                },
+              },
+            ],
+          })
+          .limit(limit)
+          .toArray();
+
+        res.send(trainers);
+      } catch (error) {
+        res
+          .status(500)
+          .send({ error: 'Failed to fetch trainers by specialization' });
+      }
+    });
     //trainer details api
     app.get('/allTrainer/:id', async (req, res) => {
       const trainerId = req.params.id;
@@ -110,31 +266,29 @@ async function run() {
       res.send(paymentDetail);
     });
 
-    
-     app.post('/create-payment-intent', async (req, res) => {
-       try {
-         const { amount, currency } = req.body;
+    app.post('/create-payment-intent', async (req, res) => {
+      try {
+        const { amount, currency } = req.body;
 
-         // Create a PaymentIntent with the order amount and currency
-         const paymentIntent = await stripe.paymentIntents.create({
-           amount: amount, // Amount in cents
-           currency: currency || 'usd',
-           automatic_payment_methods: {
-             enabled: true,
-           },
-         });
+        // Create a PaymentIntent with the order amount and currency
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount, // Amount in cents
+          currency: currency || 'usd',
+          automatic_payment_methods: {
+            enabled: true,
+          },
+        });
 
-         res.send({
-           clientSecret: paymentIntent.client_secret,
-         });
-       } catch (error) {
-         console.error('Error creating payment intent:', error);
-         res.status(500).send({
-           error: error.message,
-         });
-       }
-     });
-
+        res.send({
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (error) {
+        console.error('Error creating payment intent:', error);
+        res.status(500).send({
+          error: error.message,
+        });
+      }
+    });
 
     // Payment booking API with Stripe integration
     app.post('/payment-booking', async (req, res) => {
@@ -181,7 +335,7 @@ async function run() {
       }
     });
 
-    // Webhook to handle Stripe events 
+    // Webhook to handle Stripe events
     app.post(
       '/webhook',
       express.raw({ type: 'application/json' }),
