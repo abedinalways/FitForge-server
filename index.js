@@ -1,16 +1,38 @@
 const express = require('express');
 const cors=require('cors')
 const app = express();
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const admin = require('firebase-admin');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 3000;
 
+// Initialize Firebase Admin SDK
+const serviceAccount = require('./firebase-admin-key.json');
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 //middleware
 app.use(cors());
 app.use(express.json())
 
+// JWT Middleware
+const verifyToken = async (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).send({ error: 'Unauthorized: Please log in' });
+  }
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).send({ error: 'Invalid or expired token' });
+  }
+};
 
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.4oy8t6b.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -28,12 +50,238 @@ async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
+    const userCollection = client.db('FitForge').collection('users');
     const classCollection = client.db('FitForge').collection('Classes');
     const reviewCollection = client.db('FitForge').collection('Reviews');
     const postCollection = client.db('FitForge').collection('posts');
     const subscriberCollection = client.db('FitForge').collection('subscriber');
     const trainerCollection = client.db('FitForge').collection('AllTrainer');
     const paymentCollection = client.db('FitForge').collection('Payments');
+
+    // Exchange Firebase ID token for custom JWT
+    app.post('/auth/firebase', async (req, res) => {
+      try {
+        const { idToken } = req.body;
+        if (!idToken) {
+          return res.status(400).send({ error: 'Firebase ID token required' });
+        }
+
+        // Verify Firebase ID token
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        const firebaseUid = decodedToken.uid;
+        const email = decodedToken.email;
+
+        // Find or create user in MongoDB
+        let user = await userCollection.findOne({ firebaseUid });
+        if (!user) {
+          user = {
+            firebaseUid,
+            email,
+            name: decodedToken.name || email.split('@')[0],
+            createdAt: new Date(),
+          };
+          await userCollection.insertOne(user);
+        }
+
+        // Generate custom JWT
+        const jwtToken = jwt.sign(
+          { userId: user._id.toString(), firebaseUid, email },
+          process.env.JWT_SECRET,
+          { expiresIn: '1h' }
+        );
+
+        res.send({
+          token: jwtToken,
+          user: { id: user._id, email, name: user.name },
+        });
+      } catch (error) {
+        res.status(401).send({ error: 'Invalid Firebase token' });
+      }
+    });
+
+    // Register user
+    app.post('/register', async (req, res) => {
+      try {
+        const { email, password, name } = req.body;
+        if (!email || !password || !name) {
+          return res
+            .status(400)
+            .send({ error: 'Email, password, and name are required' });
+        }
+
+        // Check if user exists
+        const existingUser = await userCollection.findOne({ email });
+        if (existingUser) {
+          return res.status(400).send({ error: 'User already exists' });
+        }
+
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create user
+        const user = {
+          email,
+          password: hashedPassword,
+          name,
+          createdAt: new Date(),
+        };
+        const result = await userCollection.insertOne(user);
+
+        // Generate JWT
+        const token = jwt.sign(
+          { userId: result.insertedId.toString(), email },
+          process.env.JWT_SECRET,
+          { expiresIn: '1h' }
+        );
+
+        res.send({ token, user: { id: result.insertedId, email, name } });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to register user' });
+      }
+    });
+
+    // Login user
+    app.post('/login', async (req, res) => {
+      try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+          return res
+            .status(400)
+            .send({ error: 'Email and password are required' });
+        }
+
+        // Find user
+        const user = await userCollection.findOne({ email });
+        if (!user) {
+          return res.status(401).send({ error: 'Invalid credentials' });
+        }
+
+        // Verify password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+          return res.status(401).send({ error: 'Invalid credentials' });
+        }
+
+        // Generate JWT
+        const token = jwt.sign(
+          { userId: user._id.toString(), email },
+          process.env.JWT_SECRET,
+          { expiresIn: '1h' }
+        );
+
+        res.send({ token, user: { id: user._id, email, name: user.name } });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to login' });
+      }
+    });
+
+    // Get posts with pagination
+    app.get('/posts', async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 6;
+        const skip = (page - 1) * limit;
+
+        const totalPosts = await postCollection.countDocuments();
+        const posts = await postCollection
+          .find()
+          .sort({ date: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          posts,
+          pagination: {
+            currentPage: page,
+            totalPages: Math.ceil(totalPosts / limit),
+            totalPosts,
+            hasNextPage: page < Math.ceil(totalPosts / limit),
+            hasPrevPage: page > 1,
+            limit,
+          },
+        });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch posts' });
+      }
+    });
+
+    // Upvote a post
+    app.post('/posts/:id/upvote', verifyToken, async (req, res) => {
+      try {
+        const postId = req.params.id;
+        const userId = req.user.userId;
+        const post = await postCollection.findOne({
+          _id: new ObjectId(postId),
+        });
+
+        if (!post) {
+          return res.status(404).send({ error: 'Post not found' });
+        }
+
+        const upvotes = post.upvotes || [];
+        const downvotes = post.downvotes || [];
+
+        if (upvotes.includes(userId)) {
+          return res.status(400).send({ error: 'Already upvoted' });
+        }
+
+        if (downvotes.includes(userId)) {
+          await postCollection.updateOne(
+            { _id: new ObjectId(postId) },
+            { $pull: { downvotes: userId } }
+          );
+        }
+
+        const result = await postCollection.updateOne(
+          { _id: new ObjectId(postId) },
+          { $addToSet: { upvotes: userId }, $set: { downvotes } }
+        );
+
+        res.send({ success: true, message: 'Upvoted successfully' });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to upvote post' });
+      }
+    });
+
+    // Downvote a post
+    app.post('/posts/:id/downvote', verifyToken, async (req, res) => {
+      try {
+        const postId = req.params.id;
+        const userId = req.user.userId;
+        const post = await postCollection.findOne({
+          _id: new ObjectId(postId),
+        });
+
+        if (!post) {
+          return res.status(404).send({ error: 'Post not found' });
+        }
+
+        const upvotes = post.upvotes || [];
+        const downvotes = post.downvotes || [];
+
+        if (downvotes.includes(userId)) {
+          return res.status(400).send({ error: 'Already downvoted' });
+        }
+
+        if (upvotes.includes(userId)) {
+          await postCollection.updateOne(
+            { _id: new ObjectId(postId) },
+            { $pull: { upvotes: userId } }
+          );
+        }
+
+        const result = await postCollection.updateOne(
+          { _id: new ObjectId(postId) },
+          { $addToSet: { downvotes: userId }, $set: { upvotes } }
+        );
+
+        res.send({ success: true, message: 'Downvoted successfully' });
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to downvote post' });
+      }
+    });
+
     //classes api
     app.get('/featuredClasses', async (req, res) => {
       const query = {};
