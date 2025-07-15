@@ -51,7 +51,14 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
     const userCollection = client.db('FitForge').collection('users');
+    const appliedTrainersCollection = client
+      .db('FitForge')
+      .collection('appliedTrainers');
     const classCollection = client.db('FitForge').collection('Classes');
+    const slotsCollection = client.db('FitForge').collection('slots');
+    const transactionsCollection = client
+      .db('FitForge')
+      .collection('transactions');
     const reviewCollection = client.db('FitForge').collection('Reviews');
     const postCollection = client.db('FitForge').collection('posts');
     const subscriberCollection = client.db('FitForge').collection('subscriber');
@@ -78,21 +85,28 @@ async function run() {
             firebaseUid,
             email,
             name: decodedToken.name || email.split('@')[0],
+            role: 'member', // Default role
             createdAt: new Date(),
+            lastLogin: new Date(),
           };
           await userCollection.insertOne(user);
+        } else {
+          await userCollection.updateOne(
+            { firebaseUid },
+            { $set: { lastLogin: new Date() } }
+          );
         }
 
         // Generate custom JWT
         const jwtToken = jwt.sign(
-          { userId: user._id.toString(), firebaseUid, email },
+          { userId: user._id.toString(), firebaseUid, email, role: user.role },
           process.env.JWT_SECRET,
           { expiresIn: '1h' }
         );
 
         res.send({
           token: jwtToken,
-          user: { id: user._id, email, name: user.name },
+          user: { id: user._id, email, name: user.name, role: user.role },
         });
       } catch (error) {
         res.status(401).send({ error: 'Invalid Firebase token' });
@@ -123,18 +137,23 @@ async function run() {
           email,
           password: hashedPassword,
           name,
+          role: 'member', // Default role
           createdAt: new Date(),
+          lastLogin: new Date(),
         };
         const result = await userCollection.insertOne(user);
 
         // Generate JWT
         const token = jwt.sign(
-          { userId: result.insertedId.toString(), email },
+          { userId: result.insertedId.toString(), email, role: user.role },
           process.env.JWT_SECRET,
           { expiresIn: '1h' }
         );
 
-        res.send({ token, user: { id: result.insertedId, email, name } });
+        res.send({
+          token,
+          user: { id: result.insertedId, email, name, role: user.role },
+        });
       } catch (error) {
         res.status(500).send({ error: 'Failed to register user' });
       }
@@ -164,15 +183,279 @@ async function run() {
 
         // Generate JWT
         const token = jwt.sign(
-          { userId: user._id.toString(), email },
+          { userId: user._id.toString(), email, role: user.role },
           process.env.JWT_SECRET,
           { expiresIn: '1h' }
         );
+        await userCollection.updateOne(
+          { _id: user._id },
+          { $set: { lastLogin: new Date() } }
+        );
 
-        res.send({ token, user: { id: user._id, email, name: user.name } });
+        res.send({
+          token,
+          user: { id: user._id, email, name: user.name, role: user.role },
+        });
       } catch (error) {
         res.status(500).send({ error: 'Failed to login' });
       }
+    });
+
+    // Newsletter Subscribers
+    app.get('/newsletter', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const subscribers = await subscriberCollection.find().toArray();
+      res.send(subscribers);
+    });
+
+    // All Trainers
+    app.get('/trainers', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const trainers = await userCollection.find({ role: 'trainer' }).toArray();
+      res.send(trainers);
+    });
+
+    // Delete Trainer (Change role to member)
+    app.put('/trainers/:id', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const trainerId = req.params.id;
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(trainerId) },
+        { $set: { role: 'member' } }
+      );
+      res.send(result);
+    });
+
+    // Applied Trainers
+    app.get('/applied-trainers', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const applications = await appliedTrainersCollection.find().toArray();
+      res.send(applications);
+    });
+
+    // Trainer Application Details
+    app.get('/applied-trainers/:id', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const application = await appliedTrainersCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!application) {
+        return res.status(404).send({ error: 'Application not found' });
+      }
+      res.send(application);
+    });
+
+    // Confirm Trainer Application
+    app.put('/applied-trainers/:id/confirm', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const application = await appliedTrainersCollection.findOne({
+        _id: new ObjectId(req.params.id),
+      });
+      if (!application) {
+        return res.status(404).send({ error: 'Application not found' });
+      }
+      await userCollection.updateOne(
+        { _id: new ObjectId(application.userId) },
+        { $set: { role: 'trainer' } }
+      );
+      await trainerCollection.insertOne({
+        ...application.applicationDetails,
+        userId: application.userId,
+        createdAt: new Date(),
+      });
+      await appliedTrainersCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.send({ success: true });
+    });
+
+    // Reject Trainer Application
+    app.put('/applied-trainers/:id/reject', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const { rejectionReason } = req.body;
+      if (!rejectionReason) {
+        return res.status(400).send({ error: 'Rejection reason required' });
+      }
+      await appliedTrainersCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { status: 'rejected', rejectionReason, updatedAt: new Date() } }
+      );
+      res.send({ success: true });
+    });
+
+    // Apply as Trainer
+    app.post('/apply-trainer', verifyToken, async (req, res) => {
+      if (req.user.role !== 'member') {
+        return res
+          .status(403)
+          .send({ error: 'Only members can apply as trainers' });
+      }
+      const applicationData = {
+        userId: req.user.userId,
+        applicationDetails: req.body,
+        status: 'pending',
+        appliedAt: new Date(),
+      };
+      const result = await appliedTrainersCollection.insertOne(applicationData);
+      res.send(result);
+    });
+
+    // Balance and Transactions
+    app.get('/balance', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const totalBalance = await transactionsCollection
+        .aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }])
+        .toArray();
+      const transactions = await transactionsCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+      const subscribersCount = await subscriberCollection.countDocuments();
+      const paidMembersCount = await paymentCollection.countDocuments({
+        status: 'completed',
+      });
+      res.send({
+        totalBalance: totalBalance[0]?.total || 0,
+        transactions,
+        subscribersCount,
+        paidMembersCount,
+      });
+    });
+
+    // Add New Class
+    app.post('/classes', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const classData = {
+        ...req.body,
+        bookings: 0,
+        createdAt: new Date(),
+      };
+      const result = await classCollection.insertOne(classData);
+      res.send(result);
+    });
+
+    // Get All Classes
+    app.get('/classes', async (req, res) => {
+      const classes = await classCollection.find().toArray();
+      res.send(classes);
+    });
+
+    // Manage Slots
+    app.get('/slots', verifyToken, async (req, res) => {
+      if (req.user.role !== 'trainer') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const slots = await slotsCollection
+        .find({ trainerId: new ObjectId(req.user.userId) })
+        .toArray();
+      res.send(slots);
+    });
+
+    // Add New Slot
+    app.post('/slots', verifyToken, async (req, res) => {
+      if (req.user.role !== 'trainer') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const slotData = {
+        ...req.body,
+        trainerId: new ObjectId(req.user.userId),
+        createdAt: new Date(),
+      };
+      const result = await slotsCollection.insertOne(slotData);
+      res.send(result);
+    });
+
+    // Delete Slot
+    app.delete('/slots/:id', verifyToken, async (req, res) => {
+      if (req.user.role !== 'trainer') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const result = await slotsCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+        trainerId: new ObjectId(req.user.userId),
+      });
+      res.send(result);
+    });
+
+    // Add New Forum Post
+    app.post('/posts', verifyToken, async (req, res) => {
+      if (!['admin', 'trainer'].includes(req.user.role)) {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const postData = {
+        ...req.body,
+        writer: req.user.email,
+        upvotes: [],
+        downvotes: [],
+        date: new Date(),
+      };
+      const result = await postCollection.insertOne(postData);
+      res.send(result);
+    });
+
+    // Activity Log
+    app.get('/activity-log', verifyToken, async (req, res) => {
+      if (req.user.role !== 'member') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const applications = await appliedTrainersCollection
+        .find({ userId: new ObjectId(req.user.userId) })
+        .toArray();
+      res.send(applications);
+    });
+
+    // Update Profile
+    app.put('/profile', verifyToken, async (req, res) => {
+      const { name, profilePicture } = req.body;
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(req.user.userId) },
+        { $set: { name, profilePicture } }
+      );
+      res.send(result);
+    });
+
+    // Get Booked Trainer
+    app.get('/booked-trainer', verifyToken, async (req, res) => {
+      if (req.user.role !== 'member') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const slots = await slotsCollection
+        .find({ bookedBy: new ObjectId(req.user.userId) })
+        .toArray();
+      res.send(slots);
+    });
+
+    // Submit Review
+    app.post('/reviews', verifyToken, async (req, res) => {
+      if (req.user.role !== 'member') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+      const reviewData = {
+        ...req.body,
+        userId: new ObjectId(req.user.userId),
+        createdAt: new Date(),
+      };
+      const result = await reviewCollection.insertOne(reviewData);
+      res.send(result);
     });
 
     // Get posts with pagination
