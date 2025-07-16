@@ -149,7 +149,7 @@ DB_PASS=your_password
 
 
 
-Alternatively, use a local MongoDB instance: mongodb://localhost:27017/FitForge.
+Alternatively, use a local MongoDB instance: mongodb://localhost:5173/FitForge.
 
 
 
@@ -161,7 +161,7 @@ node server.js
 
 
 
-The API will be available at http://localhost:3000.
+The API will be available at [http://localhost:3000.](https://fitforge-sage.vercel.app/)
 
 Usage
 
