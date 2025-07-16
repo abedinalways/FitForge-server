@@ -1,3 +1,10 @@
+# FitForge Frontend
+
+![FitForge Banner](https://github.com/Programming-Hero-Web-Course4/b11a12-server-side-abedinalways/blob/main/Screenshot%202025-07-16%20232702.png)
+![FitForge Banner](https://github.com/Programming-Hero-Web-Course4/b11a12-server-side-abedinalways/blob/main/Screenshot%202025-07-16%20232735.png)
+
+The frontend of **FitForge**, a fitness platform, provides a responsive and user-friendly interface for members to apply as trainers, view their application status, and interact with fitness-related features. Built with React and styled with Material Tailwind, it ensures a seamless experience across devices.
+
 FitForge Server
 
  FitForge, a fitness platform, powers the API for trainer applications, user authentication, and fitness-related features. Built with Node.js, Express, and MongoDB, it integrates Firebase Authentication and Stripe for payments, ensuring a secure and scalable server
