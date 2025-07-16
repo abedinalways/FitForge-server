@@ -15,6 +15,8 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+
+
 //middleware
 app.use(cors());
 app.use(express.json())
@@ -32,6 +34,16 @@ const verifyToken = async (req, res, next) => {
   } catch (error) {
     return res.status(401).send({ error: 'Invalid or expired token' });
   }
+};
+
+// Role-based Middleware
+const requireRole = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return res.status(403).send({ error: 'Access denied: Insufficient permissions' });
+    }
+    next();
+  };
 };
 
 
@@ -133,7 +145,7 @@ async function run() {
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create user
-        const user = {
+        const newUser = {
           email,
           password: hashedPassword,
           name,
@@ -141,18 +153,18 @@ async function run() {
           createdAt: new Date(),
           lastLogin: new Date(),
         };
-        const result = await userCollection.insertOne(user);
+        const result = await userCollection.insertOne(newUser);
 
         // Generate JWT
         const token = jwt.sign(
-          { userId: result.insertedId.toString(), email, role: user.role },
+          { userId: result.insertedId.toString(), email, role: newUser.role },
           process.env.JWT_SECRET,
           { expiresIn: '1h' }
         );
 
         res.send({
           token,
-          user: { id: result.insertedId, email, name, role: user.role },
+          user: { id: result.insertedId, email, name, role: newUser.role },
         });
       } catch (error) {
         res.status(500).send({ error: 'Failed to register user' });
@@ -200,6 +212,51 @@ async function run() {
         res.status(500).send({ error: 'Failed to login' });
       }
     });
+
+    // Fetch Current User (Protected)
+    app.get('/me', verifyToken, async (req, res) => {
+      const user = await userCollection.findOne({
+        _id: new ObjectId(req.user.userId),
+      });
+      if (!user) return res.status(404).send({ error: 'User not found' });
+
+      res.send({
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      });
+    });
+
+    // Only Admin can access this
+    app.get(
+      '/admin/dashboard',
+      verifyToken,
+      requireRole('admin'),
+      async (req, res) => {
+        res.send({ message: 'Welcome Admin!' });
+      }
+    );
+
+    // Trainer only route
+    app.get(
+      '/trainer/dashboard',
+      verifyToken,
+      requireRole('trainer'),
+      async (req, res) => {
+        res.send({ message: 'Welcome Trainer!' });
+      }
+    );
+
+    // Member only route
+    app.get(
+      '/member/dashboard',
+      verifyToken,
+      requireRole('member'),
+      async (req, res) => {
+        res.send({ message: 'Welcome Member!' });
+      }
+    );
 
     // Newsletter Subscribers
     app.get('/newsletter', verifyToken, async (req, res) => {
@@ -305,7 +362,7 @@ async function run() {
           .send({ error: 'Only members can apply as trainers' });
       }
       const applicationData = {
-        userId: req.user.userId,
+        userId: new ObjectId(req.user.userId),
         applicationDetails: req.body,
         status: 'pending',
         appliedAt: new Date(),
@@ -396,6 +453,23 @@ async function run() {
       res.send(result);
     });
 
+    // Get single forum post
+    app.get('/posts/:id', async (req, res) => {
+      try {
+        const postId = req.params.id;
+        const post = await postCollection.findOne({
+          _id: new ObjectId(postId),
+        });
+
+        if (!post) {
+          return res.status(404).send({ error: 'Post not found' });
+        }
+
+        res.send(post);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch post' });
+      }
+    });
     // Add New Forum Post
     app.post('/posts', verifyToken, async (req, res) => {
       if (!['admin', 'trainer'].includes(req.user.role)) {
@@ -417,10 +491,37 @@ async function run() {
       if (req.user.role !== 'member') {
         return res.status(403).send({ error: 'Access denied' });
       }
-      const applications = await appliedTrainersCollection
-        .find({ userId: new ObjectId(req.user.userId) })
-        .toArray();
-      res.send(applications);
+
+      try {
+        const applications = await appliedTrainersCollection
+          .find({ userId: new ObjectId(req.user.userId) })
+          .sort({ appliedAt: -1 })
+          .toArray();
+        res.send(applications);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch activity log' });
+      }
+    });
+
+    // Get trainer application details (for admins)
+    app.get('/applied-trainers/:id', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied' });
+      }
+
+      try {
+        const application = await appliedTrainersCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+
+        if (!application) {
+          return res.status(404).send({ error: 'Application not found' });
+        }
+
+        res.send(application);
+      } catch (error) {
+        res.status(500).send({ error: 'Failed to fetch application' });
+      }
     });
 
     // Update Profile
@@ -726,6 +827,19 @@ async function run() {
       const result = await subscriberCollection.insertOne(subscriber);
       res.send(result);
     });
+    // Admin-only Route - Get all subscribers
+    app.get('/newsletter-subscriber', verifyToken, async (req, res) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      const subscriber = await subscriberCollection
+        .find()
+        .project({ name: 1, email: 1, subscribedDate: 1 })
+        .toArray();
+
+      res.json(subscriber);
+    });
     //team api
     app.get('/team', async (req, res) => {
       const cursor = trainerCollection.find().limit(3);
@@ -738,6 +852,24 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
+
+    // Get Booked Trainers for Member
+    app.get(
+      '/member/booked-trainers',
+      verifyToken,
+      requireRole('member'),
+      async (req, res) => {
+        try {
+          const bookings = await paymentCollection
+            .find({ userId: new ObjectId(req.user.userId) })
+            .toArray();
+
+          res.send(bookings);
+        } catch (error) {
+          res.status(500).send({ error: 'Failed to fetch booked trainers' });
+        }
+      }
+    );
 
     // Get trainers by specialization
     app.get('/trainersBySpecialization/:specialization', async (req, res) => {
@@ -774,6 +906,7 @@ async function run() {
       });
       res.send(trainer);
     });
+
     //trainer Booking api
     app.get('/trainer/:id', async (req, res) => {
       const bookingId = req.params.id;
@@ -821,35 +954,26 @@ async function run() {
       }
     });
 
-    // Payment booking API with Stripe integration
-    app.post('/payment-booking', async (req, res) => {
+    // Payment booking API
+    app.post('/payment-booking', verifyToken, async (req, res) => {
       try {
         const paymentData = req.body;
 
         // Save payment information to database
-        const result = await paymentCollection.insertOne({
-          ...paymentData,
-          createdAt: new Date(),
-        });
+        const bookingData = {
+          userId: new ObjectId(req.user.userId),
+          trainerId: new ObjectId(paymentData.trainerId),
+          trainerName: paymentData.trainerName,
+          slot: paymentData.slot,
+          packageId: new ObjectId(paymentData.packageId),
+          packageName: paymentData.packageName,
+          price: paymentData.price,
+          customerInfo: paymentData.customerInfo,
+          paymentDate: new Date(),
+          status: 'completed',
+        };
 
-        // If payment is successful, increase booking count
-        if (paymentData.status === 'completed') {
-          // Find the class/package and increment booking count
-          const classFilter = { _id: new ObjectId(paymentData.packageId) };
-          const updateDoc = {
-            $inc: { bookings: 1 },
-          };
-
-          await classCollection.updateOne(classFilter, updateDoc);
-
-          // Update trainer's booking count if needed
-          const trainerFilter = { _id: new ObjectId(paymentData.trainerId) };
-          const trainerUpdateDoc = {
-            $inc: { totalBookings: 1 },
-          };
-
-          await trainerCollection.updateOne(trainerFilter, trainerUpdateDoc);
-        }
+        const result = await paymentCollection.insertOne(bookingData);
 
         res.send({
           success: true,
