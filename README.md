@@ -1,7 +1,8 @@
 FitForge Server
 
-The backend of FitForge, a fitness platform, powers the API for trainer applications, user authentication, and fitness-related features. Built with Node.js, Express, and MongoDB, it integrates Firebase Authentication and Stripe for payments, ensuring a secure and scalable server.
+ FitForge, a fitness platform, powers the API for trainer applications, user authentication, and fitness-related features. Built with Node.js, Express, and MongoDB, it integrates Firebase Authentication and Stripe for payments, ensuring a secure and scalable server
 
+ 
 Features
 
 
