@@ -9,15 +9,11 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 3000;
 
-
-
 // Initialize Firebase Admin SDK
-
 const serviceAccount = JSON.parse(process.env.FB_SERVICE_KEY);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
-
 
 
 //middleware
