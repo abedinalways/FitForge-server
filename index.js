@@ -11,7 +11,7 @@ const port = process.env.PORT || 3000;
 
 // Initialize Firebase Admin SDK
 
-const serviceAccount = process.env.FB_SERVICE_KEY;
+const serviceAccount = JSON.parse(process.env.FB_SERVICE_KEY);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
